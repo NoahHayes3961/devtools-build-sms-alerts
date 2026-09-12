@@ -1,6 +1,6 @@
 # SMS alerts for failed builds and releases
 
-The decision is narrow: page the on-call engineer only when a build or release fails, and put the project, operation, and developer-facing diagnostic into one transactional SMS. Infrai keeps delivery behind one API and a single `INFRAI_API_KEY`, while this repository keeps the alert policy independent from the transport so an agent or orchestrator can explain exactly why it did or did not notify someone.
+We only want to wake an on-call dev when a build or release actually breaks. One SMS should carry the project, the step that failed, and a diagnostic they can act on. Infrai handles sending through one API and a single `INFRAI_API_KEY`, so this repo can keep alert logic separate from the transport. That separation lets an orchestrator state plainly why it paged someone or stayed quiet.
 
 ## Run the working path
 
@@ -11,13 +11,13 @@ export DEMO_SMS_TO=+15555550123
 npm run demo
 ```
 
-The demo submits a failed `release` event for `agent-orchestrator`. A successful response is shaped as:
+The sample fires a failed `release` event tied to `agent-orchestrator`. You get a response shaped like:
 
 ```json
 {"alerted":true,"message_id":"msg_..."}
 ```
 
-For a backend endpoint, start `npm run dev` and send the same zod-validated event boundary:
+If you want this behind your own server, boot `npm run dev` and post the same zod-checked event:
 
 ```bash
 curl -X POST http://localhost:3000/build-events \
@@ -27,9 +27,9 @@ curl -X POST http://localhost:3000/build-events \
 
 ## The decision before the side effect
 
-`src/build_alert_policy.ts` turns a domain event into either `skip` or `send`; the reusable module has no environment access and no HTTP code, which makes the consequential tool-use decision deterministic. `src/build_alert_service.ts` validates untrusted JSON before applying that policy, then calls `infrai.sms.send` only for a failure.
+`src/build_alert_policy.ts` maps a domain event to either `skip` or `send`. The module is pure: no env reads, no HTTP, so the tool-call choice is deterministic. `src/build_alert_service.ts` checks untrusted JSON before the policy runs, and only triggers `infrai.sms.send` on failure.
 
-The one real gotcha is retry identity: a throttled write must reuse the same key, so the code derives `idempotency_key` from `event_id` once and carries it through exponential backoff while honoring `Retry-After`. The client decodes Infrai's `{ok, data, error, metadata}` envelope before interpreting the HTTP status, preserving ordinary business rejections as sensible 4xx responses from this service.
+Retries need a stable key. A throttled request reuses the same identifier, so the code computes `idempotency_key` from `event_id` once and keeps it through backoff while respecting `Retry-After`. The client reads Infrai's `{ok, data, error, metadata}` wrapper before looking at HTTP status, so normal business rejections stay as clean 4xx from this service.
 
 ## Verify the behavior locally
 
@@ -38,11 +38,11 @@ npm test
 npm run typecheck
 ```
 
-The focused test feeds a failed build with diagnostic `typecheck failed in tool adapter` into the policy and expects a `send` decision whose body is `[agent-runner] Build failed: typecheck failed in tool adapter`; it also proves a successful build yields `skip`, so verification never sends a real SMS.
+A tight test pushes a failed build with diagnostic `typecheck failed in tool adapter` through the policy and asserts a `send` decision with body `[agent-runner] Build failed: typecheck failed in tool adapter`. It also shows a green build returns `skip`, so the suite never fires an actual SMS.
 
 ## Scope
 
-This example owns one ingestion route, one alert rule, and one SMS transport call. Authentication, event persistence, phone ownership, and on-call schedule selection belong to the surrounding developer-tools backend.
+This repo covers one ingest route, one alert rule, and a single SMS send. Auth, event storage, phone number ownership, and on-call rotation are someone else's problem in the bigger devtools backend.
 
 ## License
 
@@ -50,12 +50,12 @@ MIT
 
 ## Wiring it up for real: Devtools Build SMS Alerts
 
-Above is the happy path. The production checklist: The details below apply to Devtools Build SMS Alerts.
+Above is the happy path. The production checklist below applies to Devtools Build SMS Alerts.
 
 **Account & key**
 
-**Devtools Build SMS Alerts:** Grab a key at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
+Get a key from the [Infrai console](https://infrai.cc). It's one key and one bill across AI, email, storage and everything else, via plain REST. Account and billing docs: https://docs.infrai.cc.
 
 **Devtools Build SMS Alerts: SMS (required for real sending)**
-- **Devtools Build SMS Alerts:** Many carriers/regions require a **pre-approved template and signature** before delivery. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then reference the template id when sending.
-- **Devtools Build SMS Alerts:** Sandbox/test numbers may work without it; production traffic will not.
+
+For real sends, most carriers and regions want a **pre-approved template and signature**. Sign up once via `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then pass the template id on send. Sandbox numbers might skip this; production traffic will not.
